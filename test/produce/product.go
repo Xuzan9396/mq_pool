@@ -40,7 +40,7 @@ func main() {
 		})
 		log.Println("写入消息:", i)
 		i++
-		time.Sleep(time.Millisecond * 5000)
+		time.Sleep(time.Millisecond * 500)
 	}
 
 }

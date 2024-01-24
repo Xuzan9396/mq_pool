@@ -14,6 +14,7 @@ type MqModel struct {
 	IsAutoAck    bool  //自动消息确认 true 自动确认消息
 	MaxReTry     int32 //最大重试次数
 	Callback     func(quequeName string, data []byte) error
+	EventFail    func(code int, e error, data []byte)
 }
 
 var consumeMqPool *RabbitPool
@@ -80,8 +81,19 @@ func InitRabbitmqConsume(rabAddr string, rabPort int, rabUser, rabPwd, vhost str
 }
 
 // 注册接收者
+func eventFail(code int, e error, data []byte) { //消费失败的调用
+	fmt.Printf("code:%d,%v,%s\n", code, e, string(data))
+}
+
 func (mq *MqModel) RangeConsumer() {
 	//初始各个消费者队列
+
+	var eventFailInfo func(code int, e error, data []byte)
+	if mq.EventFail == nil {
+		eventFailInfo = eventFail
+	} else {
+		eventFailInfo = mq.EventFail
+	}
 	consumeReceive := &ConsumeReceive{
 		ExchangeName: mq.Exchange,     //交换机名
 		ExchangeType: mq.ExchangeType, //交换机类型
@@ -91,9 +103,10 @@ func (mq *MqModel) RangeConsumer() {
 		IsTry:        mq.IsTry,     //是否重试
 		IsAutoAck:    mq.IsAutoAck, //自动消息确认
 		MaxReTry:     mq.MaxReTry,  //最大重试次数
-		EventFail: func(code int, e error, data []byte) { //消费失败的调用
-			fmt.Printf("code:%d,%v,%s\n", code, e, string(data))
-		},
+		EventFail:    eventFailInfo,
+		//EventFail: func(code int, e error, data []byte) { //消费失败的调用
+		//	fmt.Printf("code:%d,%v,%s\n", code, e, string(data))
+		//},
 	}
 	consumeReceive.EventSuccess = mq.successHandler(consumeReceive) //消费成功的调用
 

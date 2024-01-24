@@ -825,7 +825,7 @@ func consumeTask(num int32, pool *RabbitPool, receive *ConsumeReceive) {
 					}
 					retryNums += 1
 					if retryNums > receive.MaxReTry {
-						log("超过最大重试次数" + strconv.Itoa(int(receive.MaxReTry)))
+						//log("超过最大重试次数" + strconv.Itoa(int(receive.MaxReTry)))
 						if receive.EventFail != nil {
 							receive.EventFail(RCODE_RETRY_MAX_ERROR, NewRabbitMqError(RCODE_RETRY_MAX_ERROR, "The maximum number of retries exceeded. Procedure", ""), data.Body)
 						}
@@ -833,7 +833,7 @@ func consumeTask(num int32, pool *RabbitPool, receive *ConsumeReceive) {
 						go func(tryNum int32) {
 							time.Sleep(time.Millisecond * 200)
 							header := make(map[string]interface{}, 1)
-							log("重试次数" + strconv.Itoa(int(tryNum)))
+							//log("重试次数" + strconv.Itoa(int(tryNum)))
 							header["retry_nums"] = tryNum
 
 							expirationTime, errs := RandomAround(pool.minRandomRetryTime, pool.maxRandomRetryTime)

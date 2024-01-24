@@ -51,7 +51,7 @@ func main() {
 			}
 			i += 1
 
-			return errors.New("错误了")
+			return nil
 		},
 	}
 
@@ -67,6 +67,11 @@ func main() {
 		Callback: func(name string, data []byte) error {
 			fmt.Printf("22222222:name:%s,data:%s\n", name, string(data))
 			return errors.New("错误了")
+		},
+		EventFail: func(code int, e error, data []byte) {
+			if code == mq_pool.RCODE_RETRY_MAX_ERROR {
+				fmt.Printf("入库:%s\n", string(data))
+			}
 		},
 	}
 
@@ -87,7 +92,7 @@ func setupSignalHandling() {
 
 		// 收到信号后执行清理操作
 		mq_pool.Shutdown()
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Second * 3)
 		os.Exit(0)
 
 	}()
