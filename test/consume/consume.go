@@ -33,7 +33,6 @@ func main() {
 		panic(err)
 		return
 	}
-	i := 0
 	model := &mq_pool.MqModel{
 		Exchange:     "test.exchange",
 		ExchangeType: mq_pool.EXCHANGE_TYPE_FANOUT,
@@ -45,11 +44,6 @@ func main() {
 		MaxReTry:     2,
 		Callback: func(name string, data []byte) error {
 			fmt.Printf("11111111:name:%s,data:%s\n", name, string(data))
-			if i == 1 {
-				fmt.Printf("ture:name:%s,data:%s\n", name, string(data))
-				return nil
-			}
-			i += 1
 
 			return nil
 		},
@@ -75,7 +69,9 @@ func main() {
 		},
 	}
 
-	mq_pool.RunConsume(model, model2)
+	//mq_pool.RunConsume(model, model2)
+	_ = model2
+	mq_pool.RunConsume(model)
 	setupSignalHandling()
 	select {}
 }

@@ -433,6 +433,51 @@ func (r *RabbitPool) getConnection() *rConn {
 	return r.connections[r.clientType][r.connectionIndex]
 }
 
+// 轮询不上锁版本
+func (r *RabbitPool) getConnectionNotLock() *rConn {
+	// 允许并发和误差
+	if r.connectionIndex >= 999999 {
+		r.connectionIndex = 0
+	}
+	index := atomic.AddInt32(&r.connectionIndex, 1) % r.maxConnection
+	return r.connections[r.clientType][index]
+}
+
+func (r *RabbitPool) dealProductConnt(data *RabbitMqData) (*rChannel, error) {
+	r.channelLock.RLock() // 获取读锁
+	conn := r.getConnectionNotLock()
+	if conn.conn != nil && !conn.conn.IsClosed() {
+		channelHashCodes := channelHashCode(r.clientType, conn.index, data.ExchangeName, data.ExchangeType, data.QueueName, data.Route)
+		channelQueues, ok := r.channelPool[channelHashCodes]
+		if ok {
+			r.channelLock.RUnlock() // 释放读锁
+			return channelQueues, nil
+		}
+		r.channelLock.RUnlock() // 如果没有找到，释放读锁并获取写锁
+
+		r.channelLock.Lock() // 获取写锁
+		// 再次检查以避免在获取写锁时状态已经改变
+		if channelQueues, ok = r.channelPool[channelHashCodes]; ok {
+			r.channelLock.Unlock() // 找到后释放写锁
+			return channelQueues, nil
+		}
+		// 如果还是没找到，那么创建新的channelQueues
+		rChannels, err := r.getChannelQueueReset(conn, data.ExchangeName, data.ExchangeType, data.QueueName, data.Route, false, 0, true)
+		r.channelLock.Unlock() // 创建完毕后释放写锁
+		return rChannels, err
+	}
+	r.channelLock.RUnlock() // 释放读锁
+
+	r.channelLock.Lock() // 获取写锁
+	//conn = r.getConnectionNotLock()
+	// 连接连接失败，尝试重连
+	_, isTry := tryConn(r, conn, 0, false, data.ExchangeName, data.ExchangeType, data.QueueName, data.Route)
+	rChannels, err := r.getChannelQueueReset(conn, data.ExchangeName, data.ExchangeType, data.QueueName, data.Route, false, 0, isTry)
+	r.channelLock.Unlock() // 操作完毕后释放写锁
+	return rChannels, err
+
+}
+
 /*
 *
 获取信道
@@ -901,11 +946,13 @@ func rPush(pool *RabbitPool, data *RabbitMqData, sendTime int) *RabbitMqError {
 	if sendTime >= pool.pushMaxTime {
 		return NewRabbitMqError(RCODE_PUSH_MAX_ERROR, "重试超过最大次数", "")
 	}
-	pool.channelLock.Lock()
-	conn := pool.getConnection()
-	conn, isTry := tryConn(pool, conn, 0, false, data.ExchangeName, data.ExchangeType, data.QueueName, data.Route)
-	rChannels, err := pool.getChannelQueueReset(conn, data.ExchangeName, data.ExchangeType, data.QueueName, data.Route, false, 0, isTry)
-	pool.channelLock.Unlock()
+	// gxz 改成读写锁，提高性能 2024-02-01 01:03:41
+	//pool.channelLock.Lock()
+	//conn := pool.getConnection()
+	//conn, isTry := tryConn(pool, conn, 0, false, data.ExchangeName, data.ExchangeType, data.QueueName, data.Route)
+	//rChannels, err := pool.getChannelQueueReset(conn, data.ExchangeName, data.ExchangeType, data.QueueName, data.Route, false, 0, isTry)
+	//pool.channelLock.Unlock()
+	rChannels, err := pool.dealProductConnt(data)
 	if err != nil {
 		return NewRabbitMqError(RCODE_GET_CHANNEL_ERROR, "获取信道失败", err.Error())
 	} else {
@@ -916,8 +963,8 @@ func rPush(pool *RabbitPool, data *RabbitMqData, sendTime int) *RabbitMqError {
 		})
 		if err != nil { //如果消息发送失败, 重试发送
 			//如果没有发送成功,休息两秒重发
-			time.Sleep(time.Second * 2)
 			sendTime++
+			time.Sleep(time.Second * 3)
 			return rPush(pool, data, sendTime)
 		}
 
