@@ -1,19 +1,24 @@
-## rabbitmq 连接池channel复用
+## rabbitmq 支持连接池connect,channel复用，自动重连，多连接池, 自动重试机制,direct,fanout 失败重试机制
+例如开启了: 重试，最大重试次数为2次，2次都失败后支持失败回调
+```sh
+	IsTry:        true,
+    IsAutoAck:    false,
+    MaxReTry:     2,
+```
+fanout 模式下，如果多个订阅消费者,如果只有一个消费者失败了，会单独重试发这个消费者,MaxReTry 重试次数，不会影响其他消费者
+
+
+
 
 开发语言 golang
 依赖库
 
 
-> 已在线上生产环镜运行， 5200W请求 qbs 3000 时， 连接池显示无压力<br>
-> rabbitmq部署为线上集群
-
-### 接下来的功能，`预计在1.0.15版本`
-1增加批次消息处理，用以提高生产及消费的吞吐量
 
 ### 功能说明
 1. 自定义连接池大小及最大处理channel数
 2. 消费者底层断线自动重连
-3. 生产者底层断线自动重连 `v1.0.12`
+3. 生产者底层断线自动重连
 4. 底层使用轮循方式复用tcp
 5. 生产者每个tcp对应一个channel,防止channel写入阻塞造成内存使用过量
 6. 支持rabbitmq exchangeType
@@ -29,81 +34,102 @@
 
 
 ### 使用
-1. 初始化
+1. 消费者
 ```
-var oncePool sync.Once
-var instanceRPool *kelleyRabbimqPool.RabbitPool
-func initrabbitmq() *kelleyRabbimqPool.RabbitPool {
-	oncePool.Do(func() {
-        //初始化生产者
-		instanceRPool = kelleyRabbimqPool.NewProductPool()
-        //初始化消费者
-	    instanceConsumePool = kelleyRabbimqPool.NewConsumePool()
-        //使用默认虚拟host "/"
-		err := instanceRPool.Connect("192.168.1.202", 5672, "guest", "guest")
-        //使用自定义虚
-        //err:=instanceConsumePool.ConnectVirtualHost("192.168.1.202", 5672, "guest", "guest", "/testHost")
-		if err != nil {
-			fmt.Println(err)
-		}
-	})
-	return instanceRPool
+package mq_model
+
+import (
+	"github.com/Xuzan9396/mq_pool"
+	"github.com/spf13/viper"
+	"log"
+	"strconv"
+	"strings"
+)
+
+func InitMq() {
+	rabAddr := strings.Split(viper.GetString("mq.addr_url"), ":")[0]
+	rabPort, _ := strconv.Atoi(strings.Split(viper.GetString("mq.addr_url"), ":")[1])
+	rabUser := viper.GetString("mq.username")
+	rabPwd := viper.GetString("mq.password")
+	vhost := viper.GetString("mq.vhost")
+	maxConnet := int32(2)
+	maxChannel := int32(2)
+	err := mq_pool.InitRabbitmqConsume(rabAddr, rabPort, rabUser, rabPwd, vhost,
+		mq_pool.WithConsumeMaxConnection(maxConnet),
+		mq_pool.WithConsumeMaxConsumeChannel(maxChannel),
+	)
+	if err != nil {
+		log.Fatal("mq_pool.InitRabbitmqConsume err:", err)
+		return
+	}
+
+    // 多个消费者事件
+	mq_pool.RunConsume(NewMqSendModel())
+	//mq_pool.RunConsume(NewMqSendModel(), NewMqSendModelGuild())
+
 }
+
+func ShutDown() {
+	mq_pool.Shutdown()
+}
+
+func NewMqSendModel() *mq_pool.MqModel {
+	res := &mq_pool.MqModel{
+		Exchange:     "send_gift_fanout.exchange",
+		ExchangeType: mq_pool.EXCHANGE_TYPE_FANOUT,
+		Queue:        "send_gift_fanout_rank.queue",
+		Routeingkey:  "send_gift_fanout_rank.routeKey",
+		Ctag:         "send_gift_fanout_rank.tag",
+		IsTry:        true,
+		IsAutoAck:    false,
+		MaxReTry:     2,
+		Callback:     handler_mq.NewModel().SendGiftCallback,
+	}
+	return res
+}
+
+func NewMqSendModelGuild() *mq_pool.MqModel {
+	res := &mq_pool.MqModel{
+		Exchange:     "send_gift_fanout.exchange",
+		ExchangeType: mq_pool.EXCHANGE_TYPE_FANOUT,
+		Queue:        "send_gift_fanout_guild.queue",
+		Routeingkey:  "send_gift_fanout_guild.routeKey",
+		Ctag:         "send_gift_fanout_guild.tag",
+		IsTry:        true,
+		IsAutoAck:    false,
+		MaxReTry:     2,
+		Callback:     handler_mq.NewModel().SendGiftGuild,
+		EventFail: func(code int, e error, data []byte) {
+			if code == mq_pool.RCODE_RETRY_MAX_ERROR {
+				//handler_mq.NewModel().SendGiftGuildFail(data)
+			}
+		},
+	}
+
+	return res
+}
+
 ```
 
 
 2.  生产者
 ```
-var wg sync.WaitGroup
-	for i:=0;i<100000; i++ {
-		wg.Add(1)
-		go func(num int) {
-			defer wg.Done()
-			data:=kelleyRabbimqPool.GetRabbitMqDataFormat("testChange5", kelleyRabbimqPool.EXCHANGE_TYPE_TOPIC, "textQueue5", "/", fmt.Sprintf("这里是数据%d", num))
-			_=instanceRPool.Push(data)
-		}(i)
-	}
-	wg.Wait()
-```
-
-3. 消费者
-> 可定义多个消息者事件, 不通交换机, 队列, 路由
->
-> 每个事件独立
->
-
-```
-nomrl := &rabbitmq.ConsumeReceive{
-        #定义消费者事件
-        ExchangeName: "testChange31",//队列名称
-        ExchangeType: kelleyRabbimqPool.EXCHANGE_TYPE_DIRECT,
-        Route:        "",
-        QueueName:    "testQueue31",
-        IsTry:true,//是否重试
-        IsAutoAck: false, //是否自动确认消息
-        MaxReTry: 5,//最大重试次数
-        EventFail: func(code int, e error, data []byte) {
-        	fmt.Printf("error:%s", e)
-        },
-        /***
-         * 参数说明
-         * @param data []byte 接收的rabbitmq数据
-         * @param header map[string]interface{} 原rabbitmq header
-         * @param retryClient RabbitmqPool.RetryClientInterface 自定义重试数据接口，重试需return true 防止数据重复提交
-         ***/
-        EventSuccess: func(data []byte, header map[string]interface{},retryClient kelleyRabbimqPool.RetryClientInterface)bool {//如果返回true 则无需重试
-            _ = retryClient.Ack()//确认消息    	
-            fmt.Printf("data:%s\n", string(data))
-        	return true
-        },
-	}
-	instanceConsumePool.RegisterConsumeReceive(nomrl)
-
-	err := instanceConsumePool.RunConsume()
+	maxConnet := int32(2)
+	err := mq_pool.InitRabbitmqProduct(rabAddr, rabPort, rabUser, rabPwd, vhost, mq_pool.WithProductMaxConnection(maxConnet))
 	if err != nil {
-		fmt.Println(err)
-	}
+        log.Fatal("mq_pool.InitRabbitmqProduct err:", err)
+        return
+    }
+   	err := mq_pool.PublishPool(&mq_pool.PublishInfo{
+		ExChangeName: "send_gift_fanout.exchange",
+		QueueName:    "",
+		RouteKey:     "",
+		ExchangeType: mq_pool.EXCHANGE_TYPE_FANOUT,
+		Body:         string(resByte),
+	}) 
 ```
+
+
 > * 参数说明
 
 | 名称 | 类型 | 说明 |
