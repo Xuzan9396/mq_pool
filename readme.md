@@ -1,6 +1,6 @@
 ## rabbitmq 支持连接池connect,channel复用，自动重连，多连接池, 自动重试机制,direct,fanout 失败重试机制
 例如开启了: 重试，最大重试次数为2次，2次都失败后支持失败回调
-```sh
+```yaml
 	IsTry:        true,
     IsAutoAck:    false,
     MaxReTry:     2,
